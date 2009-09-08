@@ -10,7 +10,8 @@
  */
 
 
-#include "pilot.h"
+//#include "pilot.h"
+#include "pilot_priv.h"
 
 #include "naev.h"
 
@@ -68,6 +69,7 @@ extern void ai_getDistress( Pilot* p, const Pilot* distressed ); /**< from ai.c 
 extern AI_Profile* ai_pinit( Pilot *p, const char *ai ); /**< from ai.c */
 extern void ai_destroy( Pilot* p ); /**< from ai.c */
 extern void ai_think( Pilot* pilot, const double dt ); /**< from ai.c */
+
 /* internal */
 /* update. */
 static int pilot_shootWeapon( Pilot* p, PilotOutfitSlot* w );
@@ -85,6 +87,208 @@ static void pilot_dead( Pilot* p );
 static int pilot_getStackPos( const unsigned int id );
 static void pilot_updateMass( Pilot *pilot );
 
+AI_Profile *pilot_ai(Pilot *p)
+{
+	return pilot->ai;
+}
+
+int pilot_id(const Pilot *p)
+{
+	return p->id;
+}
+
+const char *pilot_name(const Pilot *p)
+{
+	return p->name;
+}
+
+int pilot_fuelmax(const Pilot *p)
+{
+	return p->fuelmax;
+}
+
+unsignwed int pilot_parent(const Pilot *p)
+{
+	return p->parent;
+}
+
+Task *pilot_task(const Pilot *p)
+{
+	return pilot->task;
+}
+
+double pilot_tcontrol(const Pilot *p)
+{
+	return p->tcontrol;
+}
+
+unsigned int pilot_target(const Pilot *p)
+{
+	return p->target;
+}
+
+unsigned int pilot_credits(const Pilot *p)
+{
+	return p->credits;
+}
+
+int pilot_faction(const Pilot *p)
+{
+	return p->faction;
+}
+
+double pilot_shield(const Pilot *p)
+{
+	return p->shield;
+}
+
+double pilot_shieldmax(const Pilot *p)
+{
+	return p->shieldmax;
+}
+
+double pilot_armour(const Pilot *p)
+{
+	return p->armour;
+}
+
+
+double pilot_armourmax(const Pilot *p)
+{
+	return p->armour_max;
+}
+
+Solid *pilot_solid(const Pilot *p)
+{
+	return p->solid;
+}
+
+double pilot_thrust(const Pilot *p)
+{
+	return p->thrust;
+}
+
+double pilot_speed(const Pilot *p)
+{
+	return p->speed;
+}
+
+Ship *pilot_ship(const Pilot *p)
+{
+	return p->ship;
+}
+
+int pilot_lockon_count(const Pilot *p)
+{
+	return p->lockons;
+}
+
+double pilot_timer(const Pilot *p, int n)
+{
+	if(n >= MAX_AI_TIMERS)
+		WARN("Request for out of range timer.\n");
+
+	return p->timer[n];
+}
+
+double pilot_turnrate(const Pilot *p)
+{
+	return p->turn;
+}
+
+PilotOutfitSlot **pilot_outfits(const Pilot *p)
+{
+	return p->outfits;
+}
+
+PilotOutfitSlot *pilot_secondary(const Pilot *p)
+{
+	return p->secondary;
+}
+
+double pilot_weap_speed(const Pilot *p)
+{
+	return p->weap_speed;
+}
+
+double pilot_weap_range(const Pilot *p)
+{
+	return p->weap_range;
+}
+
+int pilot_isFlag(Pilot *p, int f)
+{
+	return !!(p->flags & f);
+}
+
+void pilot_setFlag(Pilot *p, int f)
+{
+	p->flags |= f;
+}
+
+void pilot_rmFlag(p,f)
+{
+	p->flags &= ~f;
+}
+
+void pilot_set_secondary(const Pilot *p, PilotOutfitSlot *o)
+{
+	p->secondary = o;
+}
+
+void pilot_set_credits(Pilot *p, int c)
+{
+	if(c < 0)
+		WARN("Pilot given negative credits.\n");
+
+	p->credits = c;
+}
+
+void pilot_add_credits(Pilot *p, int c)
+{
+	if(c == 0)
+		WARN("Pilot given 0 credits.\n");
+
+	p->credits += c;
+}
+
+void pilot_set_task(Pilot *p, Task *t)
+{
+	p->task = t;
+}
+
+void pilot_set_target(Pilot *p, int id)
+{
+	p->target = id;
+}
+
+void pilot_set_tcontrol(Pilot *p, double t)
+{
+	p->tcontrol = t;
+}
+
+vod pilot_set_timer(Pilot *p, int n, double t)
+{
+	if(n >= MAX_AI_TIMERS)
+		WARN("AI has too many timers already, ignoring.\n");
+
+	p->timers[n] = t;
+}
+
+void pilot_set_fuel(Pilot *p, int fuel)
+{
+	if(fuel > p->fuel_max)
+		WARN("Pilot given more fuel than max capacity.\n");
+	if(fuel < 0)
+		WARN("Pilot given negative fuel load.\n");
+		
+	p->fuel = fuel;
+}
+
+void pilot_set_ai(Pilot *p, AI_profile *ai)
+{
+	p->ai = ai;
+}
 
 /**
  * @brief Gets the pilot's position in the stack.

@@ -31,7 +31,7 @@ LDXML   := $(shell xml2-config --libs)
 LDTTF   := $(shell freetype-config --libs)
 LDPNG   := $(shell libpng-config --libs)
 LDGL    := -lGL
-LDFLAGS := -lm $(LDLUA) $(LDCSPARSE) $(LDSDL) $(LDXML) $(LDTTF) $(LDPNG) $(LDGL) $(LDSOUND)
+LDFLAGS := -lm $(LDLUA) $(LDCSPARSE) $(LDSDL) $(LDXML) $(LDTTF) $(LDPNG) $(LDGL) $(LDSOUND) -pg
 
 # Debug stuff
 ifdef DEBUG

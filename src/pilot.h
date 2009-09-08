@@ -50,11 +50,6 @@
 #define PILOT_HOSTILE_THRESHOLD  0.09 /**< Point at which pilot becomes hostile. */
 #define PILOT_HOSTILE_DECAY      0.005 /**< Rate at which hostility decays. */
 
-
-/* flags */
-#define pilot_isFlag(p,f)  ((p)->flags & (f)) /**< Checks if flag f is set on pilot p. */
-#define pilot_setFlag(p,f) ((p)->flags |= (f)) /**< Sets flag f on pilot p. */
-#define pilot_rmFlag(p,f)  ((p)->flags &= ~(f)) /**< Removes flag f on pilot p. */
 /* creation */
 #define PILOT_PLAYER       (1<<0) /**< Pilot is a player. */
 #define PILOT_ESCORT       (1<<1) /**< Pilot is an escort. */
@@ -181,104 +176,6 @@ typedef struct Escort_s {
  */
 typedef struct Pilot_ {
 
-   unsigned int id; /**< pilot's id, used for many functions */
-   char* name; /**< pilot's name (if unique) */
-   char* title; /**< title - usually indicating special properties - @todo use */
-
-   int faction; /**< Pilot's faction. */
-
-   /* Object caracteristics */
-   Ship* ship; /**< ship pilot is flying */
-   Solid* solid; /**< associated solid (physics) */
-   double mass_cargo; /**< Amount of cargo mass added. */
-   double mass_outfit; /**< Amount of outfit mass added. */
-   int tsx; /**< current sprite x position., calculated on update. */
-   int tsy; /**< current sprite y position, calculated on update. */
-
-   /* Properties. */
-   double cpu; /**< Amount of CPU the pilot has left. */
-   double cpu_max; /**< Maximum amount of CPU the pilot has. */
-
-   /* Movement */
-   double thrust; /**< Pilot's thrust. */
-   double speed; /**< Pilot's speed. */
-   double turn; /**< Pilot's turn. */
-   double turn_base; /**< Pilot's base turn. */
-
-   /* Current health */
-   double armour; /**< Current armour. */
-   double shield; /**< Current shield. */
-   double fuel; /**< Current fuel. */
-   double armour_max; /**< Maximum armour. */
-   double shield_max; /**< Maximum shield. */
-   double fuel_max; /**< Maximum fuel. */
-   double armour_regen; /**< Armour regeneration rate (per second). */
-   double shield_regen; /**< Shield regeneration rate (per second). */
-
-   /* Energy is handled a bit differently. */
-   double energy; /**< Current energy. */
-   double energy_max; /**< Maximum energy. */
-   double energy_regen; /**< Energy regeneration rate (per second). */
-   double energy_tau; /**< Tau regeneration rate for energy. */
-
-   /* Associated functions */
-   void (*think)(struct Pilot_*, const double); /**< AI thinking for the pilot */
-   void (*update)(struct Pilot_*, const double); /**< updates the pilot */
-   void (*render)(struct Pilot_*, const double); /**< for rendering the pilot */
-
-   /* Outfit management */
-   /* Global outfits. */
-   int noutfits; /**< Total amount of slots. */
-   PilotOutfitSlot **outfits; /**< Total outfits. */
-   /* Per slot types. */
-   int outfit_nlow; /**< Number of low energy slots. */
-   PilotOutfitSlot *outfit_low; /**< The low energy slots. */
-   int outfit_nmedium; /**< Number of medium energy slots. */
-   PilotOutfitSlot *outfit_medium; /**< The medium energy slots. */
-   int outfit_nhigh; /**< Number of high energy slots. */
-   PilotOutfitSlot *outfit_high; /**< The high energy slots. */
-   /* For easier usage. */
-   PilotOutfitSlot *secondary; /**< secondary weapon */
-   PilotOutfitSlot *afterburner; /**< the afterburner */
-
-   /* Jamming */
-   double jam_range; /**< Range at which pilot starts jamming. */
-   double jam_chance; /**< Jam chance. */
-
-   /* Cargo */
-   unsigned int credits; /**< monies the pilot has */
-   PilotCommodity* commodities; /**< commodity and quantity */
-   int ncommodities; /**< number of commodities. */
-   int cargo_free; /**< Free commodity space. */
-
-   /* Weapon properties */
-   double weap_range; /**< Average range of primary weapons */
-   double weap_speed; /**< Average speed of primary weapons */
-
-   /* Misc */
-   uint32_t flags; /**< used for AI and others */
-   double ptimer; /**< generic timer for internal pilot use */
-   int lockons; /**< Stores how many seeking weapons are targetting pilot */
-   int *mounted; /**< Number of mounted outfits on the mount. */
-   double player_damage; /**< Accumulates damage done by player for hostileness.
-                              In per one of max shield + armour. */
-   double engine_glow; /**< Amount of engine glow to display. */
-
-   /* Hook attached to the pilot */
-   PilotHook *hooks; /**< Pilot hooks. */
-   int nhooks; /**< Number of pilot hooks. */
-
-   /* Escort stuff. */
-   unsigned int parent; /**< Pilot's parent. */
-   Escort_t *escorts; /**< Pilot's escorts. */
-   int nescorts; /**< Number of pilot escorts. */
-
-   /* AI */
-   unsigned int target; /**< AI target. */
-   AI_Profile* ai; /**< ai personality profile */
-   double tcontrol; /**< timer for control tick */
-   double timer[MAX_AI_TIMERS]; /**< timers for AI */
-   Task* task; /**< current action */
 } Pilot;
 
 
@@ -379,13 +276,61 @@ void pilots_clean (void);
 void pilots_cleanAll (void);
 void pilot_free( Pilot* p );
 
+/*
+ * Getters
+ */
+AI_Profile  *pilot_ai(const Pilot *);
+const char  *pilot_name(const Pilot *);
+int          pilot_id(const Pilot *);
+int          pilot_fuelmax(const Pilot *);
+int          pilot_lockon_count(const Pilot *);
+Task        *pilot_task(const Pilot *);
+double       pilot_tcontrol(const Pilot *);
+unsigned int pilot_target(const Pilot *);
+unsigned int pilot_parent(const Pilot *);
+unsigned int pilot_credits(const Pilot *);
+int          pilot_faction(const Pilot *);
+int          pilot_outfit_count(const Pilot *);
+int          pilot_ncommodities(const Pilot *);
+double       pilot_shield(const Pilot *);
+double       pilot_shieldmax(const Pilot *);
+double       pilot_armour(const Pilot *);
+double       pilot_armourmax(const Pilot *);
+double       pilot_thrust(const Pilot *);
+double       pilot_speed(const Pilot *);
+double       pilot_turnrate(const Pilot *);
+double       pilot_weap_speed(const Pilot *);
+double       pilot_weap_range(const Pilot *);
+double       pilot_timer(const Pilot *, int);
+Solid       *pilot_solid(const Pilot *);
+Ship        *pilot_ship(const Pilot *);
+PilotOutfitSlot *pilot_secondary(const Pilot *);
+PilotOutfitSlot **pilot_outfits(const Pilot *);
+
+/*
+ * Setters
+ */
+void         pilot_set_ai(Pilot *, AI_Profile *);
+void         pilot_set_fuel(Pilot *, int);
+void         pilot_set_task(Pilot *, Task *);
+void         pilot_set_target(Pilot *, int);
+void         pilot_set_tcontrol(Pilot *, double);
+void         pilot_set_secondary(Pilot *, PilotOutfitSlot *);
+void         pilot_set_timer(Pilot *, int, double);
+void         pilot_set_credits(Pilot *, int);
+void         pilot_add_credits(Pilot *, int);
+/*
+ * Flags
+ */
+int pilot_isFlag(Pilot *, int);
+void pilot_setFlag(Pilot *, int);
+void pilot_rmFlag(Pilot *, int);
 
 /*
  * Movement.
  */
 void pilot_setThrust( Pilot *p, double thrust );
 void pilot_setTurn( Pilot *p, double turn );
-
 
 /*
  * update
@@ -411,7 +356,6 @@ void pilot_updateSensorRange (void);
 int pilot_inRange( const Pilot *p, double x, double y );
 int pilot_inRangePilot( const Pilot *p, const Pilot *target );
 int pilot_inRangePlanet( const Pilot *p, int target );
-
 
 /*
  * faction

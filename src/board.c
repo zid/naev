@@ -55,26 +55,31 @@ static void board_update( unsigned int wdw );
 void player_board (void)
 {  
    Pilot *p;
+   int target;
    unsigned int wdw;
-
-   if (player->target==PLAYER_ID) {
+   Solid *psol, *tsol;
+   
+   target = pilot_target(player);
+   if (target == PLAYER_ID) {
       player_message("You need a target to board first!");
       return;
    }
 
-   p = pilot_get(player->target);
-
+   p = pilot_get(target);
+   tsol = pilot_solid(p);
+   psol = pilot_solid(player);
+   
    if (!pilot_isDisabled(p)) {
       player_message("You cannot board a ship that isn't disabled!");
       return;
    }
-   else if (vect_dist(&player->solid->pos,&p->solid->pos) >
-         p->ship->gfx_space->sw * PILOT_SIZE_APROX) {
+   else if (vect_dist(&psol->pos, &tsol->pos) >
+         pilot_ship(p)->gfx_space->sw * PILOT_SIZE_APROX) {
       player_message("You are too far away to board your target.");
       return;
    }
-   else if ((pow2(VX(player->solid->vel)-VX(p->solid->vel)) +
-            pow2(VY(player->solid->vel)-VY(p->solid->vel))) >
+   else if ((pow2(VX(psol->vel)-VX(tsol->vel)) + 
+             pow2(VY(psol->vel)-VY(tsol->vel))) >
          (double)pow2(MAX_HYPERSPACE_VEL)) {
       player_message("You are going too fast to board the ship.");
       return;
@@ -88,11 +93,11 @@ void player_board (void)
       return;
    }
    /* We'll recover it if it's the pilot's ex-escort. */
-   else if (p->parent == PLAYER_ID) {
+   else if (pilot_parent(p) == PLAYER_ID) {
       /* Try to recover. */
       pilot_dock( p, player, 0 );
       if (pilot_isFlag(p, PILOT_DELETE )) { /* Hack to see if it boarded. */
-         player_message("You recover %s into your fighter bay.", p->name);
+         player_message("You recover %s into your fighter bay.", pilot_name(p));
          return;
       }
    }
@@ -100,7 +105,7 @@ void player_board (void)
 
    /* pilot will be boarded */
    pilot_setFlag(p,PILOT_BOARDED); 
-   player_message("Boarding ship %s.", p->name);
+   player_message("Boarding ship %s.", pilot_name(p));
 
 
    /*
@@ -176,17 +181,17 @@ static void board_stealCreds( unsigned int wdw, char* str )
    (void)str;
    Pilot* p;
 
-   p = pilot_get(player->target);
+   p = pilot_get(pilot_target(player));
 
-   if (p->credits==0) { /* you can't steal from the poor */
+   if (pilot_credits(p) == 0) { /* you can't steal from the poor */
       player_message("The ship has no credits.");
       return;
    }
 
    if (board_fail(wdw)) return;
 
-   player->credits += p->credits;
-   p->credits = 0;
+   pilot_add_credits(player, pilot_credits(p));
+   pilot_set_credits(p, 0); 
    board_update( wdw ); /* update the lack of credits */
    player_message("You manage to steal the ship's credits.");
 }
@@ -204,9 +209,9 @@ static void board_stealCargo( unsigned int wdw, char* str )
    int q;
    Pilot* p;
 
-   p = pilot_get(player->target);
+   p = pilot_get(pilot_target(player));
 
-   if (p->ncommodities==0) { /* no cargo */
+   if (pilot_ncommodties(p) == 0) { /* no cargo */
       player_message("The ship has no cargo.");
       return;
    }

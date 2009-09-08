@@ -341,12 +341,13 @@ static int aiL_status = AI_STATUS_NORMAL; /**< Current AI run status. */
 static void ai_setMemory (void)
 {
    lua_State *L;
-   L = cur_pilot->ai->L;
+
+   L = pilot_ai(cur_pilot)->L;
 
    /* */
    lua_getglobal(L, "pilotmem");
    /* pilotmem */
-   lua_pushnumber(L, cur_pilot->id);
+   lua_pushnumber(L, pilot_id(cur_pilot));
    /* pilotmem, id */
    lua_gettable(L, -2);
    /* pilotmem, table */
@@ -382,14 +383,18 @@ static void ai_run( lua_State *L, const char *funcname )
 #ifdef DEBUGGING
    if (lua_isnil(L, -1)) {
       WARN("Pilot '%s' ai -> '%s': attempting to run non-existant function",
-            cur_pilot->name, funcname );
+            pilot_name(cur_pilot), funcname );
       lua_pop(L,1);
       return;
    }
 #endif /* DEBUGGING */
 
    if (lua_pcall(L, 0, 0, 0)) { /* error has occured */
-      WARN("Pilot '%s' ai -> '%s': %s", cur_pilot->name, funcname, lua_tostring(L,-1));
+      WARN("Pilot '%s' ai -> '%s': %s", 
+      	pilot_name(cur_pilot),
+      	funcname,
+      	lua_tostring(L,-1)
+      	);
       lua_pop(L,1);
    }
 }
@@ -405,7 +410,7 @@ static void ai_run( lua_State *L, const char *funcname )
  */
 int ai_pinit( Pilot *p, const char *ai )
 {
-   int i, n;
+   int i, n, fuel, id;
    AI_Profile *prof;
    lua_State *L;
    char buf[PATH_MAX], param[PATH_MAX];
@@ -436,17 +441,19 @@ int ai_pinit( Pilot *p, const char *ai )
    prof = ai_getProfile(buf);
    if (prof == NULL)
       WARN("AI Profile '%s' not found.", buf);
-   p->ai = prof;
-   L = p->ai->L;
+   pilot_set_ai(p, prof);
+   L = pilot_ai(p)->L;
 
    /* Set fuel.  Hack until we do it through AI itself. */
-   p->fuel  = (RNG_2SIGMA()/4. + 0.5) * (p->fuel_max - HYPERSPACE_FUEL);
-   p->fuel += HYPERSPACE_FUEL;
+   fuel  = (RNG_2SIGMA()/4. + 0.5) * (pilot_fuelmax(p) - HYPERSPACE_FUEL);
+   fuel += HYPERSPACE_FUEL;
+   pilot_set_fuel(p, fuel);
 
    /* Adds a new pilot memory in the memory table. */
+   id = pilot_id(p);
    lua_getglobal(L, "pilotmem"); /* pm */
    lua_newtable(L);              /* pm, nt */
-   lua_pushnumber(L, p->id);     /* pm, nt, n */
+   lua_pushnumber(L, id);     /* pm, nt, n */
    lua_pushvalue(L,-2);          /* pm, nt, n, nt */
    lua_settable(L,-4);           /* pm, nt */
 
@@ -478,19 +485,22 @@ int ai_pinit( Pilot *p, const char *ai )
 void ai_destroy( Pilot* p )
 {
    lua_State *L;
-   L = p->ai->L;
-
+   Task *t;
+   
+   L = pilot_ai(p)->L;
+   t = pilot_task(p);
+   
    /* Get rid of pilot's memory. */
    lua_getglobal(L, "pilotmem");
-   lua_pushnumber(L, p->id);
+   lua_pushnumber(L, pilot_id(p));
    lua_pushnil(L);
    lua_settable(L,-3);
    lua_pop(L,1);
 
    /* Clean up tasks. */
-   if (p->task)
-      ai_freetask( p->task );
-   p->task = NULL;
+   if (t)
+      ai_freetask(t);
+   pilot_set_task(p, NULL);
 }
 
 
@@ -684,26 +694,26 @@ void ai_think( Pilot* pilot, const double dt )
    lua_State *L;
 
    ai_setPilot(pilot);
-   L = cur_pilot->ai->L; /* set the AI profile to the current pilot's */
+   L = pilot_ai(cur_pilot)->L; /* set the AI profile to the current pilot's */
 
    /* clean up some variables */
    pilot_acc         = 0;
    pilot_turn        = 0.;
    pilot_flags       = 0;
    pilot_firemode    = 0;
-   cur_pilot->target = cur_pilot->id;
-
+   pilot_set_target(cur_pilot, pilot_id(cur_pilot));
+   
    /* control function if pilot is idle or tick is up */
-   if ((cur_pilot->tcontrol < 0.) || (cur_pilot->task == NULL)) {
+   if (( pilot_tcontrol(cur_pilot) < 0.) || (pilot_task(cur_pilot) == NULL)) {
       ai_run(L, "control"); /* run control */
       lua_getglobal(L,"control_rate");
-      cur_pilot->tcontrol = lua_tonumber(L,-1);
+      pilot_set_tcontrol(cur_pilot, lua_tonumber(L,-1));
       lua_pop(L,1);
    }
 
    /* pilot has a currently running task */
-   if (cur_pilot->task)
-      ai_run(L, cur_pilot->task->name);
+   if (pilot_task(cur_pilot))
+      ai_run(L, pilot_task(cur_pilot)->name);
 
    /* make sure pilot_acc and pilot_turn are legal */
    pilot_acc   = CLAMP( 0., 1., pilot_acc );
@@ -734,17 +744,22 @@ void ai_think( Pilot* pilot, const double dt )
 void ai_attacked( Pilot* attacked, const unsigned int attacker )
 {
    lua_State *L;
-
+   AI_Profile *ai;
+   
+   ai = pilot_ai(attacked);
    /* Must have an AI profile. */
-   if (attacked->ai == NULL)
+   if (ai == NULL)
       return;
 
    ai_setPilot(attacked);
-   L = cur_pilot->ai->L;
+   L = ai->L;
    lua_getglobal(L, "attacked");
    lua_pushnumber(L, attacker);
    if (lua_pcall(L, 1, 0, 0)) {
-      WARN("Pilot '%s' ai -> 'attacked': %s", cur_pilot->name, lua_tostring(L,-1));
+      WARN("Pilot '%s' ai -> 'attacked': %s", 
+      	pilot_name(cur_pilot),
+      	lua_tostring(L,-1)
+      );
       lua_pop(L,1);
    }
 }
@@ -768,8 +783,8 @@ void ai_refuel( Pilot* refueler, unsigned int target )
    t->dat.num  = target;
 
    /* Prepend the task. */
-   t->next = refueler->task;
-   refueler->task = t;
+   t->next = pilot_task(refueler);
+   pilot_set_task(refueler, t);
 
    return;
 }
@@ -787,7 +802,7 @@ void ai_getDistress( Pilot* p, const Pilot* distressed )
 
    /* Set up the environment. */
    ai_setPilot(p);
-   L = cur_pilot->ai->L;
+   L = pilot_ai(cur_pilot)->L;
 
    /* See if function exists. */
    lua_getglobal(L, "distress");
@@ -797,10 +812,13 @@ void ai_getDistress( Pilot* p, const Pilot* distressed )
    }
 
    /* Run the function. */
-   lua_pushnumber(L, distressed->id);
-   lua_pushnumber(L, distressed->target);
+   lua_pushnumber(L, pilot_id(distressed));
+   lua_pushnumber(L, pilot_target(distressed));
    if (lua_pcall(L, 2, 0, 0)) {
-      WARN("Pilot '%s' ai -> 'distress': %s", cur_pilot->name, lua_tostring(L,-1));
+      WARN("Pilot '%s' ai -> 'distress': %s",
+      	pilot_name(cur_pilot),
+      	lua_tostring(L,-1)
+      );
       lua_pop(L,1);
    }
 }
@@ -831,18 +849,22 @@ static void ai_create( Pilot* pilot, char *param )
    if (!pilot_isFlag(pilot, PILOT_EMPTY)) {
       L = equip_L;
       lua_getglobal(L, "equip");
-      lp.pilot = cur_pilot->id;
+      lp.pilot = pilot_id(cur_pilot);
       lua_pushpilot(L,lp); 
-      lf.f = cur_pilot->faction;
+      lf.f = pilot_faction(cur_pilot);
       lua_pushfaction(L,lf);
       if (lua_pcall(L, 2, 0, 0)) { /* Error has occurred. */
-         WARN("Pilot '%s' equip -> '%s': %s", cur_pilot->name, "equip", lua_tostring(L,-1));
+         WARN("Pilot '%s' equip -> '%s': %s",
+         	pilot_name(cur_pilot),
+         	"equip",
+         	lua_tostring(L,-1)
+         );
          lua_pop(L,1);
       }
    }
 
    /* Prepare stack. */
-   L = cur_pilot->ai->L;
+   L = pilot_ai(cur_pilot)->L;
    lua_getglobal(L, "create");
 
    /* Parse parameter. */
@@ -860,7 +882,11 @@ static void ai_create( Pilot* pilot, char *param )
 
    /* Run function. */
    if (lua_pcall(L, (param!=NULL) ? 1 : 0, 0, 0)) { /* error has occured */
-      WARN("Pilot '%s' ai -> '%s': %s", cur_pilot->name, "create", lua_tostring(L,-1));
+      WARN("Pilot '%s' ai -> '%s': %s",
+      	pilot_name(cur_pilot),
+      	"create",
+      	lua_tostring(L,-1)
+      );
       lua_pop(L,1);
    }
 
@@ -937,12 +963,12 @@ static int aiL_pushtask( lua_State *L )
    }
 
    if (pos == 1) { /* put at the end */
-      for (pointer = cur_pilot->task; pointer->next != NULL; pointer = pointer->next);
+      for (pointer = pilot_task(cur_pilot); pointer->next != NULL; pointer = pointer->next);
       pointer->next = t;
    }
    else { /* default put at the beginning */
-      t->next = cur_pilot->task;
-      cur_pilot->task = t;
+      t->next = pilot_task(cur_pilot);
+      pilot_set_task(cur_pilot, t);
    }
 
    return 0;
@@ -956,7 +982,7 @@ static int aiL_pushtask( lua_State *L )
 static int aiL_poptask( lua_State *L )
 {
    (void)L; /* hack to avoid -W -Wall warnings */
-   Task* t = cur_pilot->task;
+   Task* t = pilot_task(cur_pilot);
 
    /* Tasks must exist. */
    if (t == NULL) {
@@ -964,7 +990,7 @@ static int aiL_poptask( lua_State *L )
       return 0;
    }
 
-   cur_pilot->task = t->next;
+   pilot_set_task(cur_pilot, t->next);
    t->next = NULL;
    ai_freetask(t);
    return 0;
@@ -979,7 +1005,7 @@ static int aiL_poptask( lua_State *L )
  */
 static int aiL_taskname( lua_State *L )
 {
-   if (cur_pilot->task) lua_pushstring(L, cur_pilot->task->name);
+   if (pilot_task(cur_pilot)) lua_pushstring(L, pilot_name(cur_pilot));
    else lua_pushstring(L, "none");
    return 1;
 }
@@ -1006,14 +1032,18 @@ static int aiL_getplayer( lua_State *L )
  */
 static int aiL_gettarget( lua_State *L )
 {
+   Task *t;
+   
+   t = pilot_task(cur_pilot);
+   
    /* Must have a task. */
-   if (cur_pilot->task == NULL)
+   if (!t)
       return 0;
 
    /* Pask task type. */
-   switch (cur_pilot->task->dtype) {
+   switch (t->dtype) {
       case TYPE_INT:
-         lua_pushnumber(L, cur_pilot->task->dat.num);
+         lua_pushnumber(L, t->dat.num);
          return 1;
 
       default:
@@ -1031,18 +1061,23 @@ static int aiL_gettarget( lua_State *L )
 static int aiL_getrndpilot( lua_State *L )
 {
    int p;
+   int id;
+   
+   id = pilot_id(cur_pilot);
+   
    p = RNG(0, pilot_nstack-1);
    /* Make sure it can't be the same pilot. */
-   if (pilot_stack[p]->id == cur_pilot->id) {
+   if (pilot_id(pilot_stack[p]) == id) {
       p++;
       if (p >= pilot_nstack)
          p = 0;
    }
    /* Last check. */
-   if (pilot_stack[p]->id == cur_pilot->id)
+   if (pilot_id(pilot_stack[p]) == id)
       return 0;
+
    /* Actually found a pilot. */
-   lua_pushnumber(L, pilot_stack[p]->id );
+   lua_pushnumber(L, pilot_id(pilot_stack[p]));
    return 1;
 }
 
@@ -1056,13 +1091,13 @@ static int aiL_armour( lua_State *L )
 
    if (lua_isnumber(L,1)) {
       p = pilot_get((unsigned int)lua_tonumber(L,1));
-      if (p==NULL) {
+      if (!p) {
          NLUA_ERROR(L, "Pilot ID does not belong to a pilot.");
          return 0;
       }
-      d = p->armour;
+      d = pilot_armour(p);
    }
-   else d = cur_pilot->armour;
+   else d = pilot_armour(cur_pilot);
 
    lua_pushnumber(L, d);
    return 1;
@@ -1082,9 +1117,9 @@ static int aiL_shield( lua_State *L )
          NLUA_ERROR(L, "Pilot ID does not belong to a pilot.");
          return 0;
       }
-      d = p->shield;
+      d = pilot_shield(p);
    }
-   else d = cur_pilot->shield;
+   else d = pilot_shield(cur_pilot);
 
    lua_pushnumber(L, d);
    return 1;
@@ -1104,9 +1139,9 @@ static int aiL_parmour( lua_State *L )
          NLUA_ERROR(L, "Pilot ID does not belong to a pilot.");
          return 0;
       }
-      d = p->armour / p->armour_max * 100.;
+      d = pilot_armour(p) / pilot_armourmax(p) * 100.;
    }
-   else d = cur_pilot->armour / cur_pilot->armour_max * 100.;
+   else d = pilot_armour(cur_pilot) / pilot_armourmax(cur_pilot) * 100.;
 
    lua_pushnumber(L, d);
    return 1;
@@ -1126,9 +1161,9 @@ static int aiL_pshield( lua_State *L )
          NLUA_ERROR(L, "Pilot ID does not belong to a pilot.");
          return 0;
       }
-      d = p->shield / p->shield_max * 100.;
+      d = pilot_shield(p) / pilot_shieldmax(p) * 100.;
    }
-   else d = cur_pilot->shield / cur_pilot->shield_max * 100.;
+   else d = pilot_shield(cur_pilot) / pilot_shieldmax(cur_pilot) * 100.;
 
    lua_pushnumber(L, d);
    return 1;
@@ -1163,14 +1198,14 @@ static int aiL_getdistance( lua_State *L )
          NLUA_ERROR(L, "Pilot ID does not belong to a pilot.");
          return 0;
       }
-      v = &pilot->solid->pos;
+      v = &pilot_solid(pilot)->pos;
    }
    
    /* wrong parameter */
    else
       NLUA_INVALID_PARAMETER();
 
-   lua_pushnumber(L, vect_dist(v, &cur_pilot->solid->pos));
+   lua_pushnumber(L, vect_dist(v, &pilot_solid(cur_pilot)->pos));
    return 1;
 }
 
@@ -1190,7 +1225,7 @@ static int aiL_getpos( lua_State *L )
    }
    else p = cur_pilot; /* default to self */
 
-   lua_pushlightuserdata(L, &p->solid->pos );
+   lua_pushlightuserdata(L, &pilot_solid(p)->pos );
 
    return 1;
 }
@@ -1211,7 +1246,8 @@ static int aiL_minbrakedist( lua_State *L )
    Vector2d vv;
    unsigned int id;
    Pilot *p;
-
+   Solid *s1, *s2;
+   
    /* More complicated calculation based on relative velocity. */
    if (lua_gettop(L) > 0) {
       /* Get target. */
@@ -1222,36 +1258,39 @@ static int aiL_minbrakedist( lua_State *L )
          return 0;
       }
 
+      s1 = pilot_solid(cur_pilot);
+      s2 = pilot_solid(p);
+      
       /* Set up the vectors. */
-      vect_cset( &vv, p->solid->vel.x - cur_pilot->solid->vel.x,
-            p->solid->vel.y - cur_pilot->solid->vel.y );
+      vect_cset( &vv, s2->vel.x - s1->vel.x,
+            s2->vel.y - s1->vel.y );
    
       /* Run the same calculations. */
       time = VMOD(vv) /
-            (cur_pilot->thrust / cur_pilot->solid->mass);
+            (pilot_thrust(cur_pilot) / s1->mass);
 
       /* Get relative velocity. */
-      vel = MIN(cur_pilot->speed - VMOD(p->solid->vel), VMOD(vv));
+      vel = MIN(pilot_speed(cur_pilot) - VMOD(s2->vel), VMOD(vv));
       if (vel < 0.)
          vel = 0.;
 
       /* Get distance to brake. */
-      dist = vel*(time+1.1*180./cur_pilot->turn) -
-            0.5*(cur_pilot->thrust/cur_pilot->solid->mass)*time*time;
+      dist = vel*(time+1.1*180./pilot_turnrate(cur_pilot)) -
+            0.5*(pilot_thrust(cur_pilot)/s1->mass)*time*time;
    }
 
    /* Simple calculation based on distance. */
    else {
       /* Get current time to reach target. */
-      time = VMOD(cur_pilot->solid->vel) /
-            (cur_pilot->thrust / cur_pilot->solid->mass);
+      time = VMOD(s1->vel) /
+            (pilot_thrust(cur_pilot) / s1->mass);
 
       /* Get velocity. */
-      vel = MIN(cur_pilot->speed,VMOD(cur_pilot->solid->vel));
+      vel = MIN(pilot_speed(cur_pilot), VMOD(s1->vel));
 
       /* Get distance. */
-      dist = vel*(time+1.1*180./cur_pilot->turn) -
-            0.5*(cur_pilot->thrust/cur_pilot->solid->mass)*time*time;
+      dist = vel*(time+1.1*180./pilot_turnrate(cur_pilot)) -
+            0.5*(pilot_thrust(cur_pilot)/s1->mass)*time*time;
    }
 
    lua_pushnumber(L, dist); /* return */
@@ -1287,7 +1326,7 @@ static int aiL_shipclass( lua_State *L )
    else
       p = cur_pilot;
 
-   lua_pushstring(L, ship_class(p->ship));
+   lua_pushstring(L, ship_class(pilot_ship(p)));
    return 1;
 }
 
@@ -1311,7 +1350,7 @@ static int aiL_shipmass( lua_State *L )
    else
       p = cur_pilot;
 
-   lua_pushnumber(L, p->solid->mass);
+   lua_pushnumber(L, pilot_solid(p)->mass);
    return 1;
 }
 
@@ -1339,6 +1378,8 @@ static int aiL_getstanding( lua_State *L )
 {
    unsigned int id;
    Pilot *p;
+   int pfac, cpfac;
+   
    /* Get parameters. */
    id = luaL_checklong(L,1);
    p = pilot_get(id);
@@ -1346,14 +1387,17 @@ static int aiL_getstanding( lua_State *L )
       NLUA_ERROR(L, "Pilot ID does not belong to a pilot.");
       return 0;
    }
-
+   
+   pfac  = pilot_faction(p);
+   cpfac = pilot_faction(cur_pilot);
+   
    /* Get faction standing. */
-   if (p->faction == FACTION_PLAYER)
-      lua_pushnumber(L, faction_getPlayer(cur_pilot->faction));
+   if (pfac == FACTION_PLAYER)
+      lua_pushnumber(L, faction_getPlayer(cpfac));
    else {
-      if (areAllies( cur_pilot->faction, p->faction ))
+      if (areAllies( cpfac, pfac ))
          lua_pushnumber(L, 100);
-      else if (areEnemies( cur_pilot->faction, p->faction ))
+      else if (areEnemies( cpfac, pfac ))
          lua_pushnumber(L,-100);
       else
          lua_pushnumber(L, 0);
@@ -1391,7 +1435,9 @@ static int aiL_exists( lua_State *L )
  */
 static int aiL_ismaxvel( lua_State *L )
 {
-   lua_pushboolean(L,(VMOD(cur_pilot->solid->vel) > cur_pilot->speed-MIN_VEL_ERR));
+   lua_pushboolean(L,
+   	VMOD(pilot_solid(cur_pilot)->vel) > pilot_speed(cur_pilot)-MIN_VEL_ERR
+   );
    return 1;
 }
 
@@ -1401,7 +1447,7 @@ static int aiL_ismaxvel( lua_State *L )
  */
 static int aiL_isstopped( lua_State *L )
 {
-   lua_pushboolean(L,(VMOD(cur_pilot->solid->vel) < MIN_VEL_ERR));
+   lua_pushboolean(L,(VMOD(pilot_solid(cur_pilot)->vel) < MIN_VEL_ERR));
    return 1;
 }
 
@@ -1413,7 +1459,8 @@ static int aiL_isenemy( lua_State *L )
 {
    unsigned int id;
    Pilot *p;
-
+   int fac;
+   
    /* Get the pilot. */
    id = luaL_checklong(L,1);
    p = pilot_get(id);
@@ -1422,15 +1469,17 @@ static int aiL_isenemy( lua_State *L )
       return 0;
    }
 
+   fac = pilot_faction(p);
+
    /* Player needs special handling in case of hostility. */
-   if (p->faction == FACTION_PLAYER) {
+   if (fac == FACTION_PLAYER) {
       lua_pushboolean(L, pilot_isHostile(cur_pilot));
       lua_pushboolean(L,1);
       return 1;
    }
 
    /* Check if is ally. */
-   lua_pushboolean(L,areEnemies(cur_pilot->faction, p->faction));
+   lua_pushboolean(L, areEnemies(pilot_faction(cur_pilot), fac));
    return 1;
 }
 
@@ -1441,7 +1490,8 @@ static int aiL_isally( lua_State *L )
 {
    unsigned int id;
    Pilot *p;
-
+   int pfac, cpfac;
+   
    /* Get the pilot. */
    id = luaL_checklong(L,1);
    p = pilot_get(id);
@@ -1450,14 +1500,17 @@ static int aiL_isally( lua_State *L )
       return 0;
    }
 
+   pfac  = pilot_faction(p);
+   cpfac = pilot_faction(cur_pilot);
+
    /* Player needs special handling in case of friendliness. */
-   if (p->faction == FACTION_PLAYER) {
+   if (pfac == FACTION_PLAYER) {
       lua_pushboolean(L, pilot_isFriendly(cur_pilot));
       return 1;
    }
 
    /* Check if is ally. */
-   lua_pushboolean(L,areAllies(cur_pilot->faction, p->faction));
+   lua_pushboolean(L,areAllies(cpfac, pfac));
    return 1;
 }
 
@@ -1515,7 +1568,7 @@ static int aiL_isdisabled( lua_State *L )
  */
 static int aiL_haslockon( lua_State *L )
 {
-   lua_pushboolean(L, cur_pilot->lockons > 0);
+   lua_pushboolean(L, pilot_lockon_count(cur_pilot) > 0);
    return 1;
 }
 
@@ -1533,7 +1586,7 @@ static int aiL_accel( lua_State *L )
       if (n > 1.) n = 1.;
       else if (n < 0.) n = 0.;
 
-      if (VMOD(cur_pilot->solid->vel) > (n * cur_pilot->speed))
+      if (VMOD(pilot_solid(cur_pilot)->vel) > (n * pilot_speed(cur_pilot)))
          pilot_acc = 0.;
    }
    else
@@ -1565,7 +1618,8 @@ static int aiL_face( lua_State *L )
    double d, mod, diff;
    unsigned int id;
    int n;
-
+   Solid *solid;
+   
    /* Get first parameter, aka what to face. */
    n  = -2;
    lv = NULL;
@@ -1580,7 +1634,8 @@ static int aiL_face( lua_State *L )
             NLUA_ERROR(L, "Pilot ID does not belong to a pilot.");
             return 0;
          }
-         vect_cset( &tv, VX(p->solid->pos), VY(p->solid->pos) );
+         solid = pilot_solid(p);
+         vect_cset( &tv, VX(solid->pos), VY(solid->pos) );
       }
    }
    else if (lua_isvector(L,1))
@@ -1594,17 +1649,16 @@ static int aiL_face( lua_State *L )
       if (lua_isboolean(L,2) && lua_toboolean(L,2))
          mod *= -1;
    }
-
-   vect_cset( &sv, VX(cur_pilot->solid->pos), VY(cur_pilot->solid->pos) );
+   
+   solid = pilot_solid(cur_pilot);
+   vect_cset( &sv, VX(solid->pos), VY(solid->pos) );
 
    if (lv==NULL) /* target is dynamic */
-      diff = angle_diff(cur_pilot->solid->dir,
-            (n==-1) ? VANGLE(sv) :
-            vect_angle(&sv, &tv));
+      diff = angle_diff(solid->dir, (n==-1) ? VANGLE(sv):vect_angle(&sv, &tv));
    else /* target is static */
-      diff = angle_diff( cur_pilot->solid->dir,   
-            (n==-1) ? VANGLE(cur_pilot->solid->pos) :
-            vect_angle(&cur_pilot->solid->pos, &lv->vec));
+      diff = angle_diff( solid->dir,
+            (n==-1) ? VANGLE(solid->pos) :
+            vect_angle(&solid->pos, &lv->vec));
 
    /* Make pilot turn. */
    pilot_turn = mod*diff;
@@ -1621,14 +1675,16 @@ static int aiL_brake( lua_State *L )
 {
    (void)L; /* hack to avoid -W -Wall warnings */
    double diff, d;
-
-   d = cur_pilot->solid->dir+M_PI;
+   Solid *solid;
+   
+   solid = pilot_solid(cur_pilot);
+   d = solid->dir+M_PI;
    if (d >= 2*M_PI) d = fmod(d, 2*M_PI);
    
-   diff = angle_diff(d,VANGLE(cur_pilot->solid->vel));
+   diff = angle_diff(d, VANGLE(solid->vel));
    pilot_turn = 10*diff;
 
-   if (ABS(diff) < MAX_DIR_ERR && VMOD(cur_pilot->solid->vel) > MIN_VEL_ERR)
+   if (ABS(diff) < MAX_DIR_ERR && VMOD(solid->vel) > MIN_VEL_ERR)
       pilot_acc = 1.;
 
    return 0;
@@ -1647,8 +1703,8 @@ static int aiL_getnearestplanet( lua_State *L )
 
    /* cycle through planets */
    for (dist=0., j=-1, i=0; i<cur_system->nplanets; i++) {
-      d = vect_dist( &cur_system->planets[i]->pos, &cur_pilot->solid->pos );
-      if ((!areEnemies(cur_pilot->faction,cur_system->planets[i]->faction)) &&
+      d = vect_dist(&cur_system->planets[i]->pos, &pilot_solid(cur_pilot)->pos);
+      if ((!areEnemies(pilot_faction(cur_pilot), cur_system->planets[i]->faction)) &&
             (d < dist)) { /* closer friendly planet */
          j = i;
          dist = d;
@@ -1702,7 +1758,7 @@ static int aiL_getlandplanet( lua_State *L )
    /* Copy friendly planet.s */
    for (nplanets=0, i=0; i<cur_system->nplanets; i++)
       if (planet_hasService(cur_system->planets[i],PLANET_SERVICE_BASIC) &&
-            !areEnemies(cur_pilot->faction,cur_system->planets[i]->faction))
+            !areEnemies(pilot_faction(cur_pilot), cur_system->planets[i]->faction))
          planets[nplanets++] = cur_system->planets[i];
 
    /* no planet to land on found */
@@ -1746,7 +1802,8 @@ static int aiL_relvel( lua_State *L )
    double dot, mod;
    Pilot *p;
    Vector2d vv, pv;
-
+   Solid *psolid, *cpsolid;
+   
    id = luaL_checklong(L,1);
    p = pilot_get(id);
    if (p==NULL) {
@@ -1754,11 +1811,13 @@ static int aiL_relvel( lua_State *L )
       return 0;
    }
 
+   psolid  = pilot_solid(p);
+   cpsolid = pilot_solid(cur_pilot);
+   
    /* Get the projection of target on current velocity. */
-   vect_cset( &vv, p->solid->vel.x - cur_pilot->solid->vel.x,
-         p->solid->vel.y - cur_pilot->solid->vel.y );
-   vect_cset( &pv, p->solid->pos.x - cur_pilot->solid->pos.x,
-         p->solid->pos.y - cur_pilot->solid->pos.y );
+   vect_cset(&vv, psolid->vel.x - cpsolid->vel.x, psolid->vel.y - cpsolid->vel.y);
+   vect_cset(&pv, psolid->pos.x - cpsolid->pos.x, psolid->pos.y - cpsolid->pos.y );
+
    dot = vect_dot( &pv, &vv );
    mod = MAX(VMOD(pv), 1.); /* Avoid /0. */
    
@@ -1773,8 +1832,8 @@ static int aiL_stop( lua_State *L )
 {
    (void) L; /* avoid gcc warning */
 
-   if (VMOD(cur_pilot->solid->vel) < MIN_VEL_ERR)
-      vect_pset( &cur_pilot->solid->vel, 0., 0. );
+   if (VMOD(pilot_solid(cur_pilot)->vel) < MIN_VEL_ERR)
+      vect_pset( &pilot_solid(cur_pilot)->vel, 0., 0. );
 
    return 0;
 }
@@ -1858,7 +1917,9 @@ static int aiL_aim( lua_State *L )
    double mod;
    double speed;
    NLUA_MIN_ARGS(1);
-
+   Solid *psolid, *csolid;
+   PilotOutfitSlot *sec;
+   
    /* Only acceptable parameter is pilot id */
    id = luaL_checklong(L,1);
    p = pilot_get(id);
@@ -1867,31 +1928,33 @@ static int aiL_aim( lua_State *L )
       return 0;
    }
 
+   psolid = pilot_solid(p);
+   csolid = pilot_solid(cur_pilot);
+   
    /* Get the distance */
-   dist = vect_dist( &cur_pilot->solid->pos, &p->solid->pos );
+   dist = vect_dist( &csolid->pos, &psolid->pos );
+
+   sec = pilot_secondary(cur_pilot);
 
    /* Check if should recalculate weapon speed with secondary weapon. */
-   if ((cur_pilot->secondary != NULL) &&
-         outfit_isBolt(cur_pilot->secondary->outfit) &&
-         (cur_pilot->secondary->outfit->type == OUTFIT_TYPE_LAUNCHER)) {
-      speed  = cur_pilot->weap_speed + outfit_speed(cur_pilot->secondary->outfit);
+   if ((sec != NULL) && outfit_isBolt(sec->outfit) && 
+         (sec->outfit->type == OUTFIT_TYPE_LAUNCHER)) {
+      speed  = pilot_weap_speed(cur_pilot) + outfit_speed(sec->outfit);
       speed /= 2.;
    }
-   else speed = cur_pilot->weap_speed;
+   else speed = pilot_weap_speed(cur_pilot);
 
    /* Time for shots to reach that distance */
    t = dist / speed;
 
    /* Position is calculated on where it should be */
-   x = p->solid->pos.x + p->solid->vel.x*t
-         - (cur_pilot->solid->pos.x + cur_pilot->solid->vel.x*t);
-   y = p->solid->pos.y + p->solid->vel.y*t
-      - (cur_pilot->solid->pos.y + cur_pilot->solid->vel.y*t);
+   x = psolid->pos.x + psolid->vel.x*t - (csolid->pos.x + csolid->vel.x*t);
+   y = psolid->pos.y + psolid->vel.y*t - (csolid->pos.y + csolid->vel.y*t);
    vect_cset( &tv, x, y );
 
    /* Calculate what we need to turn */
    mod = 10.;
-   diff = angle_diff(cur_pilot->solid->dir, VANGLE(tv));
+   diff = angle_diff(csolid->dir, VANGLE(tv));
    pilot_turn = mod * diff;
 
    /* Return distance to target (in grad) */
@@ -1923,7 +1986,7 @@ static int aiL_combat( lua_State *L )
  */
 static int aiL_settarget( lua_State *L )
 {
-   cur_pilot->target = luaL_checklong(L,1);
+   pilot_set_target(cur_pilot, luaL_checklong(L,1));
    return 0;
 }
 
@@ -1964,7 +2027,7 @@ static int outfit_isRanged( Pilot *p, PilotOutfitSlot *o )
  */
 static int aiL_secondary( lua_State *L )
 {
-   PilotOutfitSlot *co, *po;
+   PilotOutfitSlot *co, *po, *sec;
    int i, melee;
    const char *str;
    const char *otype;
@@ -1980,19 +2043,23 @@ static int aiL_secondary( lua_State *L )
 
    /* Pilot has secondary selected - use that */
    po = NULL;
-   if (cur_pilot->secondary != NULL) {
-      co = cur_pilot->secondary;
-      if (melee && outfit_isMelee(cur_pilot,co))
+   sec = pilot_secondary(cur_pilot);
+   if (sec) {
+      co = sec;
+      if (melee && outfit_isMelee(cur_pilot, co))
          po = co;
-      else if (!melee && outfit_isRanged(cur_pilot,co))
+      else if (!melee && outfit_isRanged(cur_pilot, co))
          po = co;
    }
 
    /* Need to get new secondary */
-   if (po==NULL)  {
+   if (!po)  {
+      PilotOutfitSlot **o;
+      o = pilot_outfits(cur_pilot);
+      
       /* Iterate over the list */
-      for (i=0; i<cur_pilot->noutfits; i++) {
-         co = cur_pilot->outfits[i];
+      for (i=0; i<pilot_outfit_count(cur_pilot); i++) {
+         co = o[i];
 
          /* Must have an outfit. */
          if (co->outfit == NULL)
@@ -2018,8 +2085,8 @@ static int aiL_secondary( lua_State *L )
    r = 0;
 
    /* Check to see if we have a good secondary weapon. */
-   if (po != NULL) {
-      cur_pilot->secondary = po;
+   if (po) {
+      pilot_set_secondary(cur_pilot, po);
       otype = outfit_getTypeBroad(po->outfit);
       lua_pushstring( L, otype );
 
@@ -2044,10 +2111,10 @@ static int aiL_secondary( lua_State *L )
          }
 
          /* Get ammo. */
-         if (cur_pilot->secondary->u.ammo.outfit == NULL)
+         if (pilot_secondary(cur_pilot)->u.ammo.outfit == NULL)
             lua_pushnumber( L, 0. );
          else
-            lua_pushnumber( L, cur_pilot->secondary->u.ammo.quantity );
+            lua_pushnumber( L, pilot_secondary(cur_pilot)->u.ammo.quantity );
          r += 1;
       }
 
@@ -2124,7 +2191,7 @@ static int aiL_hostile( lua_State *L )
       return 0;
    }
 
-   if (p->faction == FACTION_PLAYER)
+   if (pilot_faction(p) == FACTION_PLAYER)
       pilot_setHostile(cur_pilot);
 
    return 0;
@@ -2137,16 +2204,18 @@ static int aiL_hostile( lua_State *L )
 static int aiL_getweaprange( lua_State *L )
 {
    double range;
-
+   PilotOutfitSlot *o;
+   
+   o = pilot_secondary(cur_pilot);
+   
    /* if 1 is passed as a parameter, secondary weapon is checked */
    if (lua_toboolean(L,1)) {
-      if (cur_pilot->secondary != NULL) {
+      if (o) {
          /* get range, launchers use ammo's range */
-         if (outfit_isLauncher(cur_pilot->secondary->outfit) &&
-               (cur_pilot->secondary->u.ammo.outfit != NULL))
-            range = outfit_range(cur_pilot->secondary->u.ammo.outfit);
+         if (outfit_isLauncher(o->outfit) && o->u.ammo.outfit)
+            range = outfit_range(o->u.ammo.outfit);
          else
-            range = outfit_range(cur_pilot->secondary->outfit);
+            range = outfit_range(o->outfit);
 
          if (range < 0.) {
             lua_pushnumber(L, 0.); /* secondary doesn't have range */
@@ -2159,7 +2228,7 @@ static int aiL_getweaprange( lua_State *L )
       }
    }
 
-   lua_pushnumber(L,cur_pilot->weap_range);
+   lua_pushnumber(L, pilot_weap_range(cur_pilot));
    return 1;
 }
 
@@ -2239,12 +2308,11 @@ static int aiL_refuel( lua_State *L )
 static int aiL_settimer( lua_State *L )
 {
    int n;
-
    /* Get parameters. */
    n = luaL_checkint(L,1);
 
    /* Set timer. */
-   cur_pilot->timer[n] = (lua_isnumber(L,2)) ? lua_tonumber(L,2)/1000. : 0;
+   pilot_set_timer(cur_pilot, n, lua_isnumber(L,2) ? lua_tonumber(L,2)/1000. : 0);
 
    return 0;
 }
@@ -2259,7 +2327,7 @@ static int aiL_timeup( lua_State *L )
    /* Get parameters. */
    n = luaL_checkint(L,1);
 
-   lua_pushboolean(L, cur_pilot->timer[n] < 0.);
+   lua_pushboolean(L, pilot_timer(cur_pilot, n) < 0.);
    return 1;
 }
 
@@ -2327,7 +2395,7 @@ static int aiL_credits( lua_State *L )
       return 0;
    }
 
-   cur_pilot->credits = luaL_checkint(L,1);
+   pilot_set_credits(cur_pilot, luaL_checkint(L,1));
    
    return 0;
 }
@@ -2366,7 +2434,7 @@ static int aiL_cargo( lua_State *L )
  */
 static int aiL_shipprice( lua_State *L )
 {
-   lua_pushnumber(L, cur_pilot->ship->price);
+   lua_pushnumber(L, pilot_ship(cur_pilot)->price);
    return 1;
 }
 
